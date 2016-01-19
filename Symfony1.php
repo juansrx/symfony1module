@@ -2,7 +2,7 @@
 namespace Codeception\Module;
 
 use Codeception\Module;
-use Codeception\Lib\Framework as Framework;
+use Codeception\Util\Framework as Framework;
 
 /**
  * Module that interacts with Symfony 1.4 applications.
@@ -23,12 +23,13 @@ use Codeception\Lib\Framework as Framework;
  * ## Configuration
  *
  * * app *required* - application you want to test. In most cases it will be 'frontend'
+ * * project_dir *required* - Symfony project root
+ * * url *required* - site url that needs  to be tested
  *
  * ## Public Properties
  * * browser - current instance of sfBrowser class.
  *
  */
-
 class Symfony1 extends Module
 {
     /**
@@ -39,19 +40,21 @@ class Symfony1 extends Module
 
     protected $session_id;
 
-    protected $config = array('app' => 'frontend');
+    protected $config = array('project_dir' => '', 'app' => 'frontend', 'url' => '/');
 
     public function _initialize()
     {
-        if (!file_exists('config/ProjectConfiguration.class.php')) throw new \Codeception\Exception\Module('Symfony1', 'config/ProjectConfiguration.class.php not found. This file is required for running symfony1');
-        require_once('config/ProjectConfiguration.class.php');
+        if (!file_exists($this->config['project_dir'] . '/config/ProjectConfiguration.class.php')) {
+            throw new \Codeception\Exception\ModuleConfigException('Symfony1',
+                'config/ProjectConfiguration.class.php not found. This file is required for running symfony1');
+        }
+        require_once($this->config['project_dir'] . '/config/ProjectConfiguration.class.php');
         $conf = \ProjectConfiguration::getApplicationConfiguration($this->config['app'], 'test', true);
-        \sfContext::createInstance($conf, 'default');
-        \sfContext::switchTo('default');
+        \sfContext::createInstance($conf);
 
         // chdir(\sfConfig::get('sf_web_dir'));
-        $this->browser = new \sfBrowser();
-        $this->browser->get('/');
+        $this->browser = new \sfBrowser($this->config['url']);
+        $this->browser->get($this->config['url']);
         \sfForm::disableCSRFProtection();
     }
 
@@ -69,7 +72,7 @@ class Symfony1 extends Module
 
     public function _failed(\Codeception\TestCase $test, $fail)
     {
-        $output = \Codeception\Configuration::outputDir() . DIRECTORY_SEPARATOR . basename($test->getFileName()) . '.page.debug.html';
+        $output = \Codeception\Configuration::logDir() . DIRECTORY_SEPARATOR . basename($test->getFileName()) . '.page.debug.html';
         file_put_contents($output, $this->browser->getResponse()->getContent());
     }
 
@@ -82,13 +85,19 @@ class Symfony1 extends Module
 
     }
 
+    public function getBrowser()
+    {
+        return $this->browser;
+    }
+
     protected function call($uri, $method = 'get', $params = array())
     {
         // multi testguy implementation
         $_SERVER['session_id'] = $this->session_id;
 
         if (false === ($empty = $this->browser->checkCurrentExceptionIsEmpty())) {
-            \PHPUnit_Framework_Assert::fail(sprintf('last request threw an uncaught exception "%s: %s"', get_class($this->browser->getCurrentException()), $this->browser->getCurrentException()->getMessage()));
+            \PHPUnit_Framework_Assert::fail(sprintf('last request threw an uncaught exception "%s: %s"',
+                get_class($this->browser->getCurrentException()), $this->browser->getCurrentException()->getMessage()));
             return;
         }
 
@@ -192,16 +201,16 @@ class Symfony1 extends Module
             $nodes = $this->browser->getResponseDomCssSelector()->matchAll($selector);
             $values = '';
             foreach ($nodes as $node) {
-                $values .= '<!-- Merged Output -->'.trim($node->nodeValue);
+                $values .= '<!-- Merged Output -->' . trim($node->nodeValue);
             }
-            $response = Framework::formatResponse($response);
+            $response = self::formatResponse($response);
 
-            return array('pageContains', $text, $values, "'$selector' on $response");
+            return array('contains', $text, $values, "'$selector' on $response");
         }
 
-        $response = Framework::formatResponse($response);
+        $response = self::formatResponse($response);
 
-        return array('pageContains', $text, strip_tags($this->browser->getResponse()->getContent()), "on $response.");
+        return array('contains', $text, strip_tags($this->browser->getResponse()->getContent()), "on $response.");
     }
 
     /**
@@ -222,7 +231,9 @@ class Symfony1 extends Module
      */
     public function seeLink($text, $url = null)
     {
-        if (!$url) return $this->see($text, 'a');
+        if (!$url) {
+            return $this->see($text, 'a');
+        }
         $nodes = $this->browser->getResponseDomCssSelector()->matchAll('a')->getNodes();
         foreach ($nodes as $node) {
             if (0 === strrpos($node->getAttribute('href'), $url)) {
@@ -249,11 +260,14 @@ class Symfony1 extends Module
      */
     public function dontSeeLink($text, $url = null)
     {
-        if (!$url) return $this->dontSee($text, 'a');
+        if (!$url) {
+            return $this->dontSee($text, 'a');
+        }
         $nodes = $this->browser->getResponseDomCssSelector()->matchAll('a')->getNodes();
         foreach ($nodes as $node) {
             if (0 === strrpos($node->getAttribute('href'), $url) && ($node->nodeValue == trim($text))) {
-                return \PHPUnit_Framework_Assert::assertFalse((0 === strrpos($node->getAttribute('href'), $url) && ($node->nodeValue == trim($text))), "link with url '$url'");
+                return \PHPUnit_Framework_Assert::assertFalse((0 === strrpos($node->getAttribute('href'),
+                        $url) && ($node->nodeValue == trim($text))), "link with url '$url'");
             }
         }
     }
@@ -318,7 +332,8 @@ class Symfony1 extends Module
     public function seeEmailReceived()
     {
         $this->debug('Emails sent: ' . $this->browser->getContext()->getMailer()->getLogger()->countMessages());
-        \PHPUnit_Framework_Assert::assertGreaterThan(0, $this->browser->getContext()->getMailer()->getLogger()->countMessages(), "");
+        \PHPUnit_Framework_Assert::assertGreaterThan(0,
+            $this->browser->getContext()->getMailer()->getLogger()->countMessages(), "");
     }
 
 
@@ -366,12 +381,18 @@ class Symfony1 extends Module
     {
 
         $form = $this->browser->getResponseDomCssSelector()->matchSingle($selector)->getNode();
-        if (!$form) \PHPUnit_Framework_Assert::fail("Form by selector '$selector' not found");
+        if (!$form) {
+            \PHPUnit_Framework_Assert::fail("Form by selector '$selector' not found");
+        }
         $fields = $this->browser->getResponseDomCssSelector()->matchAll($selector . ' input')->getNodes();
         $url = '';
         foreach ($fields as $field) {
-            if ($field->getAttribute('type') == 'checkbox') continue;
-            if ($field->getAttribute('type') == 'radio') continue;
+            if ($field->getAttribute('type') == 'checkbox') {
+                continue;
+            }
+            if ($field->getAttribute('type') == 'radio') {
+                continue;
+            }
             $url .= sprintf('%s=%s', $field->getAttribute('name'), $field->getAttribute('value')) . '&';
         }
 
@@ -462,7 +483,9 @@ class Symfony1 extends Module
     public function seeFormIsValid()
     {
         $form = $this->getForm();
-        if (!$form) \PHPUnit_Framework_Assert::fail('as any symfony forms at all');
+        if (!$form) {
+            \PHPUnit_Framework_Assert::fail('as any symfony forms at all');
+        }
         \PHPUnit_Framework_Assert::isFalse($form->hasErrors(), ', seems like there were errors');
     }
 
@@ -474,7 +497,9 @@ class Symfony1 extends Module
     public function seeErrorsInForm()
     {
         $form = $this->getForm();
-        if (!$form) \PHPUnit_Framework_Assert::fail('as any symfony forms at all');
+        if (!$form) {
+            \PHPUnit_Framework_Assert::fail('as any symfony forms at all');
+        }
         \PHPUnit_Framework_Assert::isTrue($form->hasErrors(), ', seems like there were no validation errors');
         foreach ($form->getErrorSchema() as $field => $desc) {
             $this->debug("Error in $field field: '$desc'");
@@ -502,15 +527,22 @@ class Symfony1 extends Module
     {
         $action = $this->browser->getContext()->getActionStack()->getLastEntry()->getActionInstance();
 
-        foreach ($action->getVarHolder()->getAll() as $name => $value)
-        {
+        foreach ($action->getVarHolder()->getAll() as $name => $value) {
             if ($value instanceof \sfForm && $value->isBound()) {
                 $form = $value;
                 break;
             }
         }
-        if (!isset($form)) return null;
+        if (!isset($form)) {
+            return null;
+        }
         return $form;
+    }
+
+    public function login($usr, $pass)
+    {
+        $this->browser->setHttpHeader('Content-Type', 'application/json');
+        $this->browser->post('login', ['password' => $pass, 'usuario' => $usr]);
     }
 
     /**
@@ -523,7 +555,8 @@ class Symfony1 extends Module
      */
     public function signIn($username, $password)
     {
-        $this->browser->post('/sfGuardAuth/signin', array('signin' => array('username' => $username, 'password' => $password)));
+        $this->browser->post('/sfGuardAuth/signin',
+            array('signin' => array('username' => $username, 'password' => $password)));
         $this->debug('session: ' . json_encode($this->browser->getUser()->getAttributeHolder()->getAll()));
         $this->debug('user: ' . json_encode($this->browser->getUser()->getAttributeHolder()->getAll('sfGuardSecurityUser')));
         $this->debug('credentials: ' . json_encode($this->browser->getUser()->getCredentials()));
@@ -552,9 +585,13 @@ class Symfony1 extends Module
      */
     public function amLoggedAs($name)
     {
-        if (!class_exists('Doctrine')) throw new \Exception('Doctrine is not installed. Consider using \'signIn\' action instead');
+        if (!class_exists('Doctrine')) {
+            throw new \Exception('Doctrine is not installed. Consider using \'signIn\' action instead');
+        }
         $user = \Doctrine::getTable('sfGuardUser')->findOneBy('username', $name);
-        if (!$user) throw new \Exception("User with name $name was not found in database");
+        if (!$user) {
+            throw new \Exception("User with name $name was not found in database");
+        }
         $user->clearRelated();
         $browser = $this->browser;
         $this->browser->getContext()->getStorage()->initialize($browser->getContext()->getStorage()->getOptions());
@@ -567,6 +604,30 @@ class Symfony1 extends Module
 
         $browser->get('/');
         $this->followRedirect();
+    }
+
+    public static function formatResponse($response)
+    {
+        if (strlen($response) <= 500) {
+            $response = trim($response);
+            $response = preg_replace('/\s[\s]+/', ' ', $response); // strip spaces
+            $response = str_replace("\n", '', $response);
+            return $response;
+        }
+        if (strpos($response, '<html') !== false) {
+            $formatted = 'page [';
+            $crawler = new \Symfony\Component\DomCrawler\Crawler($response);
+            $title = $crawler->filter('title');
+            if (count($title)) {
+                $formatted .= "Title: " . trim($title->first()->text());
+            }
+            $h1 = $crawler->filter('h1');
+            if (count($h1)) {
+                $formatted .= "\nH1: " . trim($h1->first()->text());
+            }
+            return $formatted . "]";
+        }
+        return "page.";
     }
 
 }
